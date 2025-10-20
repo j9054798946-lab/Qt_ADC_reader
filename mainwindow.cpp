@@ -91,7 +91,14 @@ void MainWindow::setupUI()
     m_logEdit->setReadOnly(true);
     logLayout->addWidget(m_logEdit);
 
-    mainLayout->addWidget(logGroup);
+    //mainLayout->addWidget(logGroup);
+
+    // Ранее: mainLayout->addWidget(logGroup);
+    // Сейчас создаём график
+    m_graph = new GraphWidget(this);
+    mainLayout->addWidget(m_graph);
+
+
 
     // Подключаем кнопки
     connect(m_connectBtn, &QPushButton::clicked, this, &MainWindow::connectToDevice);
@@ -154,7 +161,8 @@ void MainWindow::onDataReceived()
 {
     rxBuffer.append(m_socket->readAll());
 
-    while (rxBuffer.size() >= 9)  // 1 + 8
+    // пакет: 1 байт состояния + 8 байт от четырёх АЦП
+    while (rxBuffer.size() >= 9)
     {
         char ledChar = rxBuffer.at(0);
         if (ledChar != '0' && ledChar != '1') {
@@ -162,17 +170,27 @@ void MainWindow::onDataReceived()
             continue;
         }
 
-        // есть ли полный пакет?
         if (rxBuffer.size() < 9)
             break;
 
         quint16 adc[4];
         for (int i = 0; i < 4; i++) {
-            quint8 hi = static_cast<quint8>(rxBuffer.at(1 + 2*i));
-            quint8 lo = static_cast<quint8>(rxBuffer.at(2 + 2*i));
+            quint8 hi = static_cast<quint8>(rxBuffer.at(1 + 2 * i));
+            quint8 lo = static_cast<quint8>(rxBuffer.at(2 + 2 * i));
             adc[i] = (hi << 8) | lo;
         }
 
+        // --- Обновляем индикатор светодиода ---
+        m_ledWidget->setState(ledChar == '1');
+
+        // --- Добавляем новые значения на график ---
+        QVector<quint16> v(4);
+        for (int i = 0; i < 4; ++i)
+            v[i] = adc[i];
+        m_graph->addValues(v);
+
+        // --- Старый вывод в лог (пока закомментируем) ---
+        /*
         QString ledState = (ledChar == '1') ? "LED ВКЛ" : "LED ВЫКЛ";
         QString msg = QString("'%1' - %2 | ADC1=%3  ADC2=%4  ADC3=%5  ADC4=%6")
                         .arg(ledChar)
@@ -183,7 +201,7 @@ void MainWindow::onDataReceived()
                         .arg(adc[3]);
 
         appendLog(QDateTime::currentDateTime().toString("hh:mm:ss  ") + msg);
-        m_ledWidget->setState(ledChar == '1');
+        */
 
         rxBuffer.remove(0, 9);
     }

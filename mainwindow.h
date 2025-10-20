@@ -10,6 +10,7 @@
 #include <QPushButton>
 #include <QTextEdit>
 #include "ledwidget.h"
+#include "graphwidget.h"
 
 class MainWindow : public QMainWindow
 {
@@ -31,6 +32,7 @@ private:
     void setupUI();
     //void processReceivedData(const QByteArray &data);
     void appendLog(const QString &text);   // ← вот эта строка нужна!
+    GraphWidget *m_graph;
 private:
     QByteArray rxBuffer;
     QTcpSocket *m_socket;

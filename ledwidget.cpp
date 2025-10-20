@@ -37,7 +37,7 @@ void LedWidget::paintEvent(QPaintEvent *event)
     if (m_isOn) {
         painter.setBrush(QBrush(QColor(100, 255, 100, 100)));
         painter.setPen(Qt::NoPen);
-        QRect glowRect = ledRect.adjusted(-4, -4, 4, 4);
+        QRect glowRect = ledRect.adjusted(-8, -8, 8, 8);
         painter.drawEllipse(glowRect);
     }
 }
