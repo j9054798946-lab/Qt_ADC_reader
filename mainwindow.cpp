@@ -4,6 +4,7 @@
 #include <QGroupBox>
 #include <QTextCursor>
 #include <QDateTime>
+#include <QElapsedTimer>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -161,8 +162,17 @@ void MainWindow::onDataReceived()
 {
     rxBuffer.append(m_socket->readAll());
 
-    // пакет: 1 байт состояния + 8 байт от четырёх АЦП
-    while (rxBuffer.size() >= 9)
+    // условия пакета: 1 + 8 (4 ADC) + 2 служебных = 11‑12 байт, берем минимум 11
+    const int PACKET_LEN = 12;
+
+    static QElapsedTimer frameTimer;
+    static bool timerStarted = false;
+    if (!timerStarted) {
+        frameTimer.start();
+        timerStarted = true;
+    }
+
+    while (rxBuffer.size() >= PACKET_LEN)
     {
         char ledChar = rxBuffer.at(0);
         if (ledChar != '0' && ledChar != '1') {
@@ -170,41 +180,33 @@ void MainWindow::onDataReceived()
             continue;
         }
 
-        if (rxBuffer.size() < 9)
+        if (rxBuffer.size() < PACKET_LEN)
             break;
 
         quint16 adc[4];
-        for (int i = 0; i < 4; i++) {
-            quint8 hi = static_cast<quint8>(rxBuffer.at(1 + 2 * i));
-            quint8 lo = static_cast<quint8>(rxBuffer.at(2 + 2 * i));
+        for (int i = 0; i < 4; ++i) {
+            quint8 hi = static_cast<quint8>(rxBuffer.at(1 + 2*i));
+            quint8 lo = static_cast<quint8>(rxBuffer.at(2 + 2*i));
             adc[i] = (hi << 8) | lo;
         }
 
-        // --- Обновляем индикатор светодиода ---
         m_ledWidget->setState(ledChar == '1');
 
-        // --- Добавляем новые значения на график ---
+        // копим значения, но график обновляем реже
         QVector<quint16> v(4);
         for (int i = 0; i < 4; ++i)
             v[i] = adc[i];
         m_graph->addValues(v);
 
-        // --- Старый вывод в лог (пока закомментируем) ---
-        /*
-        QString ledState = (ledChar == '1') ? "LED ВКЛ" : "LED ВЫКЛ";
-        QString msg = QString("'%1' - %2 | ADC1=%3  ADC2=%4  ADC3=%5  ADC4=%6")
-                        .arg(ledChar)
-                        .arg(ledState)
-                        .arg(adc[0])
-                        .arg(adc[1])
-                        .arg(adc[2])
-                        .arg(adc[3]);
-
-        appendLog(QDateTime::currentDateTime().toString("hh:mm:ss  ") + msg);
-        */
-
-        rxBuffer.remove(0, 9);
+        rxBuffer.remove(0, PACKET_LEN);
     }
+
+    // ограничим скорость перерисовки графика
+    if (frameTimer.elapsed() < 50)  // 20 Гц обновления
+        return;
+    frameTimer.restart();
+
+    m_graph->update();    // перерисовка не чаще 20 раз/с
 }
 
 void MainWindow::onError(QAbstractSocket::SocketError error)
