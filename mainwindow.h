@@ -31,7 +31,8 @@ private:
     void setupUI();
     //void processReceivedData(const QByteArray &data);
     void appendLog(const QString &text);   // ← вот эта строка нужна!
-
+private:
+    QByteArray rxBuffer;
     QTcpSocket *m_socket;
     QLineEdit *m_ipEdit;
     QLineEdit *m_portEdit;

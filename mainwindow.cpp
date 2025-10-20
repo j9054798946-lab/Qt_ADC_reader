@@ -3,6 +3,7 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QTextCursor>
+#include <QDateTime>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -151,58 +152,40 @@ void MainWindow::onDisconnected()
 
 void MainWindow::onDataReceived()
 {
-    QByteArray data = m_socket->readAll();
-    static QByteArray buffer;
-    buffer.append(data);
+    rxBuffer.append(m_socket->readAll());
 
-    while (buffer.size() >= 1)
+    while (rxBuffer.size() >= 9)  // 1 + 8
     {
-        // ищем маркер состояния
-        int idx0 = buffer.indexOf('0');
-        int idx1 = buffer.indexOf('1');
-        int idx;
-
-        if (idx0 == -1 && idx1 == -1)
-            return; // пока нет ни одного корректного байта
-
-        idx = (idx0 == -1) ? idx1 :
-              (idx1 == -1) ? idx0 :
-              qMin(idx0, idx1);
-
-        if (idx > 0)
-            buffer.remove(0, idx); // отброс лишнего перед сообщением
-
-        if (buffer.isEmpty())
-            return;
-
-        char ledChar = buffer.at(0);
-
-        // пытаемся понять, есть ли данные АЦП
-        quint16 adc = 0xFFFF; // по умолчанию "нет данных"
-        bool hasAdc = (buffer.size() >= 3);
-
-        if (hasAdc) {
-            quint8 hi = static_cast<quint8>(buffer.at(1));
-            quint8 lo = static_cast<quint8>(buffer.at(2));
-            adc = (hi << 8) | lo;
+        char ledChar = rxBuffer.at(0);
+        if (ledChar != '0' && ledChar != '1') {
+            rxBuffer.remove(0, 1);
+            continue;
         }
 
-        // обновляем GUI
-        bool ledOn = (ledChar == '1');
-        m_ledWidget->setState(ledOn);
+        // есть ли полный пакет?
+        if (rxBuffer.size() < 9)
+            break;
 
-        if (hasAdc)
-            appendLog(QString("Получено: '%1' - LED %2, ADC = %3")
-                          .arg(ledChar)
-                          .arg(ledOn ? "ВКЛ" : "ВЫКЛ")
-                          .arg(adc));
-        else
-            appendLog(QString("Получено: '%1' - LED %2 (старый формат прошивки)")
-                          .arg(ledChar)
-                          .arg(ledOn ? "ВКЛ" : "ВЫКЛ"));
+        quint16 adc[4];
+        for (int i = 0; i < 4; i++) {
+            quint8 hi = static_cast<quint8>(rxBuffer.at(1 + 2*i));
+            quint8 lo = static_cast<quint8>(rxBuffer.at(2 + 2*i));
+            adc[i] = (hi << 8) | lo;
+        }
 
-        // удаляем обработанные байты (1 или 3)
-        buffer.remove(0, hasAdc ? 3 : 1);
+        QString ledState = (ledChar == '1') ? "LED ВКЛ" : "LED ВЫКЛ";
+        QString msg = QString("'%1' - %2 | ADC1=%3  ADC2=%4  ADC3=%5  ADC4=%6")
+                        .arg(ledChar)
+                        .arg(ledState)
+                        .arg(adc[0])
+                        .arg(adc[1])
+                        .arg(adc[2])
+                        .arg(adc[3]);
+
+        appendLog(QDateTime::currentDateTime().toString("hh:mm:ss  ") + msg);
+        m_ledWidget->setState(ledChar == '1');
+
+        rxBuffer.remove(0, 9);
     }
 }
 
