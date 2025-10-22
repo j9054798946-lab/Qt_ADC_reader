@@ -1,3 +1,5 @@
+// версия 4013
+//12 байт посылка, "прореживание" принятых данных для вывода на график, СВД статус.
 #include "mainwindow.h"
 #include <QMessageBox>
 #include <QGridLayout>
@@ -69,6 +71,25 @@ void MainWindow::setupUI()
     connectionLayout->addWidget(m_statusLabel, 3, 0, 1, 2);
 
     mainLayout->addWidget(connectionGroup);
+
+    // ----- группа управления -----
+    QGroupBox *ctrlGroup = new QGroupBox("Управление", this);
+    QHBoxLayout *ctrlLayout = new QHBoxLayout(ctrlGroup);
+
+    QLabel *lbl = new QLabel("Прореживание (1–500):", this);
+    m_skipBox = new QSpinBox(this);
+    m_skipBox->setRange(1, 500);
+    m_skipBox->setValue(10);
+    m_skipValue = 10;
+
+    ctrlLayout->addWidget(lbl);
+    ctrlLayout->addWidget(m_skipBox);
+    ctrlLayout->addStretch();
+
+    connect(m_skipBox, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, [this](int val){ m_skipValue = val; });
+
+    mainLayout->addWidget(ctrlGroup);
 
     // Группа отображения светодиода
     QGroupBox *ledGroup = new QGroupBox("Состояние светодиода", this);
@@ -160,6 +181,7 @@ void MainWindow::onDisconnected()
 
 void MainWindow::onDataReceived()
 {
+    static int skipCounter = 0;
     rxBuffer.append(m_socket->readAll());
 
     // условия пакета: 1 + 8 (4 ADC) + 2 служебных = 11‑12 байт, берем минимум 11
@@ -196,8 +218,15 @@ void MainWindow::onDataReceived()
         QVector<quint16> v(4);
         for (int i = 0; i < 4; ++i)
             v[i] = adc[i];
-        m_graph->addValues(v);
 
+        skipCounter++;
+        if (skipCounter < m_skipValue) {
+            rxBuffer.remove(0, PACKET_LEN);
+            continue;  // пропускаем до нужного шага
+        }
+        skipCounter = 0;
+
+        m_graph->addValues(v);
         rxBuffer.remove(0, PACKET_LEN);
     }
 

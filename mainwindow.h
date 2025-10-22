@@ -11,6 +11,7 @@
 #include <QTextEdit>
 #include "ledwidget.h"
 #include "graphwidget.h"
+#include "qspinbox.h"
 
 class MainWindow : public QMainWindow
 {
@@ -30,9 +31,11 @@ private slots:
 
 private:
     void setupUI();
-    //void processReceivedData(const QByteArray &data);
     void appendLog(const QString &text);   // ← вот эта строка нужна!
     GraphWidget *m_graph;
+private:
+    QSpinBox *m_skipBox;   // настройка прореживания
+    int m_skipValue;       // текущее значение N
 private:
     QByteArray rxBuffer;
     QTcpSocket *m_socket;
