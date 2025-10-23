@@ -39,12 +39,21 @@ void GraphWidget::paintEvent(QPaintEvent *)
 
     for (int ch = 0; ch < channels; ++ch) {
         p.setPen(QPen(colors[ch], 2));
-        for (int i = 1; i < data[ch].size(); ++i) {
+        /*for (int i = 1; i < data[ch].size(); ++i) {
             int x1 = int((i - 1) * dx);
             int x2 = int(i * dx);
             int y1 = h - int(data[ch][i - 1] * scaleY);
             int y2 = h - int(data[ch][i] * scaleY);
             p.drawLine(x1, y1, x2, y2);
-        }
+        }*/
+    for (int i = 1; i < data[ch].size(); ++i) {
+        int x1 = int((i - 1) * dx);
+        int x2 = int(i * dx);
+        int y1 = h - int(data[ch][i - 1] * scaleY);
+        int y2 = h - int(data[ch][i] * scaleY);
+
+        p.drawLine(x1, y1, x2, y1); // горизонталь
+        p.drawLine(x2, y1, x2, y2); // вертикаль
     }
+  }
 }
