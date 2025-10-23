@@ -36,15 +36,21 @@ MainWindow::~MainWindow()
 
 void MainWindow::setupUI()
 {
-    setWindowTitle("LED State Monitor");
-    setMinimumSize(400, 500);
+    setWindowTitle("ADC Monitor");
+    resize(1000, 600);
 
     QWidget *centralWidget = new QWidget(this);
     setCentralWidget(centralWidget);
 
-    QVBoxLayout *mainLayout = new QVBoxLayout(centralWidget);
+    //------------------------------------------------------------------
+    // главный горизонтальный layout
+    QHBoxLayout *mainLayout = new QHBoxLayout(centralWidget);
 
-    // Группа подключения
+    //------------------------------------------------------------------
+    // левая колонка: подключение + управление
+    QVBoxLayout *leftLayout = new QVBoxLayout();
+
+    // ===== ПОДКЛЮЧЕНИЕ =====
     QGroupBox *connectionGroup = new QGroupBox("Подключение", this);
     QGridLayout *connectionLayout = new QGridLayout(connectionGroup);
 
@@ -60,71 +66,59 @@ void MainWindow::setupUI()
     m_connectBtn = new QPushButton("Подключиться", this);
     m_disconnectBtn = new QPushButton("Отключиться", this);
     m_disconnectBtn->setEnabled(false);
-
     buttonLayout->addWidget(m_connectBtn);
     buttonLayout->addWidget(m_disconnectBtn);
     connectionLayout->addLayout(buttonLayout, 2, 0, 1, 2);
 
-    // Статус подключения
+    // ---- строка статуса и индикатора ----
+    QHBoxLayout *statusLayout = new QHBoxLayout();
     m_statusLabel = new QLabel("Отключено", this);
     m_statusLabel->setStyleSheet("QLabel { color: red; font-weight: bold; }");
-    connectionLayout->addWidget(m_statusLabel, 3, 0, 1, 2);
+    statusLayout->addWidget(m_statusLabel);
 
-    mainLayout->addWidget(connectionGroup);
+    // наш светодиод - сбоку справа
+    m_ledWidget = new LedWidget(this);
+    m_ledWidget->setFixedSize(40, 40);  // "роскошный" вид
+    statusLayout->addStretch();
+    statusLayout->addWidget(m_ledWidget);
+    connectionLayout->addLayout(statusLayout, 3, 0, 1, 2);
 
-    // ----- группа управления -----
+    leftLayout->addWidget(connectionGroup);
+
+    // ===== УПРАВЛЕНИЕ =====
     QGroupBox *ctrlGroup = new QGroupBox("Управление", this);
-    QHBoxLayout *ctrlLayout = new QHBoxLayout(ctrlGroup);
+    QVBoxLayout *ctrlLayout = new QVBoxLayout(ctrlGroup);
 
+    QHBoxLayout *skipRow = new QHBoxLayout();
     QLabel *lbl = new QLabel("Прореживание (1–500):", this);
     m_skipBox = new QSpinBox(this);
     m_skipBox->setRange(1, 500);
     m_skipBox->setValue(10);
     m_skipValue = 10;
-
-    ctrlLayout->addWidget(lbl);
-    ctrlLayout->addWidget(m_skipBox);
-    ctrlLayout->addStretch();
+    skipRow->addWidget(lbl);
+    skipRow->addWidget(m_skipBox);
+    skipRow->addStretch();
+    ctrlLayout->addLayout(skipRow);
 
     connect(m_skipBox, QOverload<int>::of(&QSpinBox::valueChanged),
             this, [this](int val){ m_skipValue = val; });
+    leftLayout->addWidget(ctrlGroup);
+    leftLayout->addStretch();
 
-    mainLayout->addWidget(ctrlGroup);
-
-    // Группа отображения светодиода
-    QGroupBox *ledGroup = new QGroupBox("Состояние светодиода", this);
-    QVBoxLayout *ledLayout = new QVBoxLayout(ledGroup);
-
-    m_ledWidget = new LedWidget(this);
-    ledLayout->addWidget(m_ledWidget, 0, Qt::AlignCenter);
-
-    QLabel *ledStateLabel = new QLabel("Красный = on, Белый = off", this);
-    ledStateLabel->setAlignment(Qt::AlignCenter);
-    ledLayout->addWidget(ledStateLabel);
-
-    mainLayout->addWidget(ledGroup);
-
-    // Лог сообщений
-    QGroupBox *logGroup = new QGroupBox("Лог сообщений", this);
-    QVBoxLayout *logLayout = new QVBoxLayout(logGroup);
-
-    m_logEdit = new QTextEdit(this);
-    m_logEdit->setMaximumHeight(150);
-    m_logEdit->setReadOnly(true);
-    logLayout->addWidget(m_logEdit);
-
-    //mainLayout->addWidget(logGroup);
-
-    // Ранее: mainLayout->addWidget(logGroup);
-    // Сейчас создаём график
+    //------------------------------------------------------------------
+    // справа — график
     m_graph = new GraphWidget(this);
-    mainLayout->addWidget(m_graph);
+    m_graph->setMinimumWidth(650);
 
+    mainLayout->addLayout(leftLayout, 0);
+    mainLayout->addWidget(m_graph, 1);
 
-
-    // Подключаем кнопки
-    connect(m_connectBtn, &QPushButton::clicked, this, &MainWindow::connectToDevice);
-    connect(m_disconnectBtn, &QPushButton::clicked, this, &MainWindow::disconnectFromDevice);
+    //------------------------------------------------------------------
+    // кнопки подключения
+    connect(m_connectBtn, &QPushButton::clicked,
+            this, &MainWindow::connectToDevice);
+    connect(m_disconnectBtn, &QPushButton::clicked,
+            this, &MainWindow::disconnectFromDevice);
 }
 
 void MainWindow::connectToDevice()
@@ -137,7 +131,7 @@ void MainWindow::connectToDevice()
         return;
     }
 
-    m_logEdit->append(QString("Подключение к %1:%2...").arg(m_deviceIP).arg(m_devicePort));
+    //m_logEdit->append(QString("Подключение к %1:%2...").arg(m_deviceIP).arg(m_devicePort));
     m_socket->connectToHost(m_deviceIP, m_devicePort);
 
     m_connectBtn->setEnabled(false);
@@ -154,7 +148,7 @@ void MainWindow::onConnected()
 {
     m_statusLabel->setText("Подключено");
     m_statusLabel->setStyleSheet("QLabel { color: green; font-weight: bold; }");
-    m_logEdit->append("Успешно подключено!");
+    //m_logEdit->append("Успешно подключено!");
 
     m_connectBtn->setEnabled(false);
     m_disconnectBtn->setEnabled(true);
@@ -166,7 +160,7 @@ void MainWindow::onDisconnected()
 {
     m_statusLabel->setText("Отключено");
     m_statusLabel->setStyleSheet("QLabel { color: red; font-weight: bold; }");
-    m_logEdit->append("Соединение разорвано");
+    //m_logEdit->append("Соединение разорвано");
 
     m_connectBtn->setEnabled(true);
     m_disconnectBtn->setEnabled(false);
@@ -255,7 +249,7 @@ void MainWindow::onError(QAbstractSocket::SocketError error)
             errorString = m_socket->errorString();
     }
 
-    m_logEdit->append(QString("Ошибка: %1").arg(errorString));
+    //m_logEdit->append(QString("Ошибка: %1").arg(errorString));
 
     m_connectBtn->setEnabled(true);
     m_disconnectBtn->setEnabled(false);
@@ -265,8 +259,8 @@ void MainWindow::onError(QAbstractSocket::SocketError error)
 
 void MainWindow::appendLog(const QString &text)
 {
-    m_logEdit->append(text);
-    QTextCursor c = m_logEdit->textCursor();
-    c.movePosition(QTextCursor::End);
-    m_logEdit->setTextCursor(c);
+    //m_logEdit->append(text);
+    //QTextCursor c = m_logEdit->textCursor();
+    //c.movePosition(QTextCursor::End);
+    //m_logEdit->setTextCursor(c);
 }
