@@ -100,8 +100,10 @@ void MainWindow::setupUI()
     skipRow->addStretch();
     ctrlLayout->addLayout(skipRow);
 
+    /*connect(m_skipBox, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, [this](int val){ m_skipValue = val; });*/
     connect(m_skipBox, QOverload<int>::of(&QSpinBox::valueChanged),
-            this, [this](int val){ m_skipValue = val; });
+            this, [this](int val){ m_skipValue = val; m_graph->setSkipValue(val); });
     leftLayout->addWidget(ctrlGroup);
     leftLayout->addStretch();
 
