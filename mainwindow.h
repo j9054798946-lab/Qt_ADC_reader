@@ -9,9 +9,9 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QTextEdit>
+#include <QSpinBox>
 #include "ledwidget.h"
 #include "graphwidget.h"
-#include "qspinbox.h"
 
 class MainWindow : public QMainWindow
 {
@@ -28,16 +28,16 @@ private slots:
     void onDisconnected();
     void onDataReceived();
     void onError(QAbstractSocket::SocketError error);
+    void onTestSequentialClicked();  // Обработчик кнопки теста
 
 private:
     void setupUI();
-    void appendLog(const QString &text);   // ← вот эта строка нужна!
-    GraphWidget *m_graph;
-private:
-    QSpinBox *m_skipBox;   // настройка прореживания
-    int m_skipValue;       // текущее значение N
-private:
-    QByteArray rxBuffer;
+    void appendLog(const QString &text);
+
+    // ========== ВАЖНО: Добавлено! ==========
+    void sendCommand(quint8 cmd, quint8 data1, quint8 data2);  // ← ДОБАВЛЕНО!
+
+    // UI элементы
     QTcpSocket *m_socket;
     QLineEdit *m_ipEdit;
     QLineEdit *m_portEdit;
@@ -46,9 +46,20 @@ private:
     QLabel *m_statusLabel;
     QTextEdit *m_logEdit;
     LedWidget *m_ledWidget;
+    GraphWidget *m_graph;
+    QSpinBox *m_skipBox;
 
+    // ========== ВАЖНО: Добавлено! ==========
+    QPushButton *m_testSequentialBtn;  // ← ДОБАВЛЕНО!
+
+    // Данные
+    QByteArray rxBuffer;
     QString m_deviceIP;
     quint16 m_devicePort;
+    int m_skipValue;
+
+    // ========== ВАЖНО: Добавлено! ==========
+    bool m_testSequentialActive;  // ← ДОБАВЛЕНО!
 };
 
 #endif // MAINWINDOW_H
