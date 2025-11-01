@@ -215,36 +215,128 @@ void MainWindow::onDisconnected()
 void MainWindow::onDataReceived()
 {
     QByteArray newData = m_socket->readAll();
-
-    // ========== ОТЛАДКА: Показать ВСЁ что пришло в сыром виде ==========
-    /*if (!newData.isEmpty()) {
-        qDebug() << "📥 <<<< ПОЛУЧЕНО от устройства:" << newData.size() << "байт";
-        qDebug() << "     HEX:" << newData.toHex(' ');
-    }*/
-
     rxBuffer.append(newData);
 
     static int skipCounter = 0;
+    bool foundSomething = true;
 
-    // ========== Обработка Echo от команд ==========
-    while (rxBuffer.size() >= 4) {
-        if (static_cast<quint8>(rxBuffer.at(0)) == 0xEE) {
-            quint8 echo_cmd = static_cast<quint8>(rxBuffer.at(1));
-            quint8 echo_data1 = static_cast<quint8>(rxBuffer.at(2));
-            quint8 echo_data2 = static_cast<quint8>(rxBuffer.at(3));
+    // ========== ЦИКЛ РАЗБОРА БУФЕРА ==========
+    while (foundSomething && rxBuffer.size() > 0) {
+        foundSomething = false;
 
-            qDebug() << "✅ ===== Echo команды получен! =====";
-            qDebug() << "   CMD:" << QString("0x%1").arg(echo_cmd, 2, 16, QChar('0'));
-            qDebug() << "   DATA1:" << QString("0x%1").arg(echo_data1, 2, 16, QChar('0'));
-            qDebug() << "   DATA2:" << QString("0x%1").arg(echo_data2, 2, 16, QChar('0'));
+        // ========== ПРИОРИТЕТ 1: Поиск Echo команды ==========
+        // Формат: [0xAA][0xEE][CMD][DATA1][DATA2]
+        for (int i = 0; i <= rxBuffer.size() - 5; i++) {
+            if (static_cast<quint8>(rxBuffer.at(i)) == 0xAA &&
+                static_cast<quint8>(rxBuffer.at(i + 1)) == 0xEE) {
 
-            rxBuffer.remove(0, 4);
-            continue;
+                quint8 echo_cmd = static_cast<quint8>(rxBuffer.at(i + 2));
+                quint8 echo_data1 = static_cast<quint8>(rxBuffer.at(i + 3));
+                quint8 echo_data2 = static_cast<quint8>(rxBuffer.at(i + 4));
+
+                qDebug() << "✅ Echo команды получен:";
+                qDebug() << "   CMD:" << QString("0x%1").arg(echo_cmd, 2, 16, QChar('0'));
+                qDebug() << "   DATA1:" << QString("0x%1").arg(echo_data1, 2, 16, QChar('0'));
+                qDebug() << "   DATA2:" << QString("0x%1").arg(echo_data2, 2, 16, QChar('0'));
+
+                // Удалить Echo (и весь мусор до него)
+                rxBuffer.remove(0, i + 5);
+                foundSomething = true;
+                break;  // Выход из цикла поиска Echo
+            }
         }
-        break;
+
+        if (foundSomething) continue;  // Нашли Echo, начать сначала
+
+        // ========== ПРИОРИТЕТ 2: Поиск батча АЦП ==========
+        // Формат: [0xBB][N][...данные...][0xCC]
+        for (int i = 0; i <= rxBuffer.size() - 2; i++) {
+            if (static_cast<quint8>(rxBuffer.at(i)) == 0xBB) {
+                // Нашли начало батча
+
+                if (rxBuffer.size() < i + 2) {
+                    // Недостаточно данных для чтения размера
+                    break;
+                }
+
+                quint8 batch_count = static_cast<quint8>(rxBuffer.at(i + 1));
+
+                // Проверка разумности размера батча
+                if (batch_count == 0 || batch_count > 30) {
+                    // Невалидный размер - это не батч, а случайный 0xBB
+                    rxBuffer.remove(0, 1);
+                    foundSomething = true;
+                    break;
+                }
+
+                // Рассчитать ожидаемый размер батча
+                // Заголовок (2) + Измерения (N × 9) + Конец (1)
+                int expected_size = 2 + batch_count * 9 + 1;
+
+                if (rxBuffer.size() < i + expected_size) {
+                    // Недостаточно данных - ждём
+                    break;
+                }
+
+                // Проверка маркера конца батча
+                if (static_cast<quint8>(rxBuffer.at(i + expected_size - 1)) != 0xCC) {
+                    // Нет маркера конца - это не батч
+                    rxBuffer.remove(0, i + 1);
+                    foundSomething = true;
+                    break;
+                }
+
+                // ========== ВАЛИДНЫЙ БАТЧ! Распаковка ==========
+                int pos = i + 2;  // Начало данных (после 0xBB и размера)
+
+                for (quint8 m = 0; m < batch_count; m++) {
+                    // Чтение одного измерения (9 байт)
+                    char ledChar = rxBuffer.at(pos);
+                    pos++;
+
+                    quint16 adc[4];
+                    for (int ch = 0; ch < 4; ch++) {
+                        quint8 hi = static_cast<quint8>(rxBuffer.at(pos++));
+                        quint8 lo = static_cast<quint8>(rxBuffer.at(pos++));
+                        adc[ch] = (hi << 8) | lo;
+                    }
+
+                    // Обновление LED (только последнее значение в батче)
+                    if (m == batch_count - 1) {
+                        m_ledWidget->setState(ledChar == '1');
+                    }
+
+                    // Добавление в график с прореживанием
+                    skipCounter++;
+                    if (skipCounter >= m_skipValue) {
+                        skipCounter = 0;
+
+                        QVector<quint16> v(4);
+                        for (int ch = 0; ch < 4; ch++) {
+                            v[ch] = adc[ch];
+                        }
+                        m_graph->addValues(v);
+                    }
+                }
+
+                // Удалить обработанный батч (включая мусор до него)
+                rxBuffer.remove(0, i + expected_size);
+                foundSomething = true;
+                break;  // Выход из цикла поиска батчей
+            }
+        }
+
+        if (foundSomething) continue;  // Нашли батч, начать сначала
+
+        // ========== Если ничего не нашли и буфер большой - удалить мусор ==========
+        if (rxBuffer.size() > 1000) {
+            // Удалить первые 100 байт (явный мусор)
+            rxBuffer.remove(0, 100);
+            foundSomething = true;
+        }
     }
 
-    const int PACKET_LEN = 12;
+    // Ограничение частоты перерисовки графика
     static QElapsedTimer frameTimer;
     static bool timerStarted = false;
     if (!timerStarted) {
@@ -252,47 +344,10 @@ void MainWindow::onDataReceived()
         timerStarted = true;
     }
 
-    // Обработка пакетов АЦП (как было)
-    while (rxBuffer.size() >= PACKET_LEN)
-    {
-        char ledChar = rxBuffer.at(0);
-        if (ledChar != '0' && ledChar != '1') {
-            rxBuffer.remove(0, 1);
-            continue;
-        }
-
-        if (rxBuffer.size() < PACKET_LEN)
-            break;
-
-        quint16 adc[4];
-        for (int i = 0; i < 4; ++i) {
-            quint8 hi = static_cast<quint8>(rxBuffer.at(1 + 2*i));
-            quint8 lo = static_cast<quint8>(rxBuffer.at(2 + 2*i));
-            adc[i] = (hi << 8) | lo;
-        }
-
-        m_ledWidget->setState(ledChar == '1');
-
-        QVector<quint16> v(4);
-        for (int i = 0; i < 4; ++i)
-            v[i] = adc[i];
-
-        skipCounter++;
-        if (skipCounter < m_skipValue) {
-            rxBuffer.remove(0, PACKET_LEN);
-            continue;
-        }
-        skipCounter = 0;
-
-        m_graph->addValues(v);
-        rxBuffer.remove(0, PACKET_LEN);
+    if (frameTimer.elapsed() >= 50) {  // 20 FPS
+        frameTimer.restart();
+        m_graph->update();
     }
-
-    if (frameTimer.elapsed() < 50)
-        return;
-    frameTimer.restart();
-
-    m_graph->update();
 }
 
 void MainWindow::onError(QAbstractSocket::SocketError error)
