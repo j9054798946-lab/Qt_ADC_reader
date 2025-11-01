@@ -214,31 +214,37 @@ void MainWindow::onDisconnected()
 
 void MainWindow::onDataReceived()
 {
-    static int skipCounter = 0;
-    rxBuffer.append(m_socket->readAll());
+    QByteArray newData = m_socket->readAll();
 
-    // ========== НОВОЕ: Проверка Echo от команд ==========
-    // Ищем маркер 0xEE в начале буфера
+    // ========== ОТЛАДКА: Показать ВСЁ что пришло в сыром виде ==========
+    /*if (!newData.isEmpty()) {
+        qDebug() << "📥 <<<< ПОЛУЧЕНО от устройства:" << newData.size() << "байт";
+        qDebug() << "     HEX:" << newData.toHex(' ');
+    }*/
+
+    rxBuffer.append(newData);
+
+    static int skipCounter = 0;
+
+    // ========== Обработка Echo от команд ==========
     while (rxBuffer.size() >= 4) {
         if (static_cast<quint8>(rxBuffer.at(0)) == 0xEE) {
-            // Это Echo от команды!
             quint8 echo_cmd = static_cast<quint8>(rxBuffer.at(1));
             quint8 echo_data1 = static_cast<quint8>(rxBuffer.at(2));
             quint8 echo_data2 = static_cast<quint8>(rxBuffer.at(3));
 
-            qDebug() << "📥 Echo получен:";
+            qDebug() << "✅ ===== Echo команды получен! =====";
             qDebug() << "   CMD:" << QString("0x%1").arg(echo_cmd, 2, 16, QChar('0'));
             qDebug() << "   DATA1:" << QString("0x%1").arg(echo_data1, 2, 16, QChar('0'));
             qDebug() << "   DATA2:" << QString("0x%1").arg(echo_data2, 2, 16, QChar('0'));
 
             rxBuffer.remove(0, 4);
-            continue;  // Обработали echo, идем дальше
+            continue;
         }
-        break;  // Это не echo, выходим из цикла проверки
+        break;
     }
 
     const int PACKET_LEN = 12;
-
     static QElapsedTimer frameTimer;
     static bool timerStarted = false;
     if (!timerStarted) {
@@ -246,7 +252,7 @@ void MainWindow::onDataReceived()
         timerStarted = true;
     }
 
-    // ========== Обработка пакетов данных АЦП (как было) ==========
+    // Обработка пакетов АЦП (как было)
     while (rxBuffer.size() >= PACKET_LEN)
     {
         char ledChar = rxBuffer.at(0);
