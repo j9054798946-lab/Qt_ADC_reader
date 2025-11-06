@@ -24,42 +24,49 @@ public:
 private slots:
     void connectToDevice();
     void disconnectFromDevice();
-    void onConnected();
-    void onDisconnected();
+
+    // ========== НОВОЕ: Разные слоты для двух сокетов ==========
+    void onDataSocketConnected();
+    void onDataSocketDisconnected();
     void onDataReceived();
-    void onError(QAbstractSocket::SocketError error);
-    void onTestSequentialClicked();  // Обработчик кнопки теста
+    void onDataSocketError(QAbstractSocket::SocketError error);
+
+    void onCmdSocketConnected();
+    void onCmdSocketDisconnected();
+    void onCmdSocketError(QAbstractSocket::SocketError error);
+
+    void onTestSequentialClicked();
 
 private:
     void setupUI();
-    void appendLog(const QString &text);
+    void sendCommand(quint8 cmd, quint8 arg);
+    // ========== ДОБАВИТЬ ЭТИ ДВЕ СТРОКИ В mainwindow.h! ==========
+    void checkBothConnected();       // Проверка что оба сокета подключены
+    void updateDisconnectedState();  // Обновление UI при отключении
 
-    // ========== ВАЖНО: Добавлено! ==========
-    void sendCommand(quint8 cmd, quint8 data1, quint8 data2);  // ← ДОБАВЛЕНО!
+    // ========== ДВА СОКЕТА ==========
+    QTcpSocket *m_socketData;  // Для приема данных АЦП (порт 23)
+    QTcpSocket *m_socketCmd;   // Для отправки команд (порт 26)
 
     // UI элементы
-    QTcpSocket *m_socket;
     QLineEdit *m_ipEdit;
-    QLineEdit *m_portEdit;
+    QLineEdit *m_portDataEdit;  // Порт для данных
+    QLineEdit *m_portCmdEdit;   // Порт для команд
     QPushButton *m_connectBtn;
     QPushButton *m_disconnectBtn;
     QLabel *m_statusLabel;
-    QTextEdit *m_logEdit;
     LedWidget *m_ledWidget;
     GraphWidget *m_graph;
     QSpinBox *m_skipBox;
-
-    // ========== ВАЖНО: Добавлено! ==========
-    QPushButton *m_testSequentialBtn;  // ← ДОБАВЛЕНО!
+    QPushButton *m_testSequentialBtn;
 
     // Данные
     QByteArray rxBuffer;
     QString m_deviceIP;
-    quint16 m_devicePort;
+    quint16 m_devicePortData;  // 23
+    quint16 m_devicePortCmd;   // 26
     int m_skipValue;
-
-    // ========== ВАЖНО: Добавлено! ==========
-    bool m_testSequentialActive;  // ← ДОБАВЛЕНО!
+    bool m_testSequentialActive;
 };
 
 #endif // MAINWINDOW_H
