@@ -1,13 +1,15 @@
 // версия 4014
-// Добавлена отправка команд на устройство
+// Добавлена отправка команд на плату в подтверждением в служебном байте
 #include "mainwindow.h"
-#include <QDebug>  // ← ДОБАВИТЬ!
 #include <QMessageBox>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QTextCursor>
 #include <QDateTime>
 #include <QElapsedTimer>
+#include <QThread>
+#include <QTimer>        // ← ДОБАВИТЬ если нет!
+#include <QDebug>        // ← ДОБАВИТЬ если нет!
 
 
 MainWindow::MainWindow(QWidget *parent)
@@ -19,6 +21,9 @@ MainWindow::MainWindow(QWidget *parent)
     , m_devicePortCmd(26)
     , m_skipValue(10)
     , m_testSequentialActive(false)
+    , m_pendingCmd(0)        // ← ДОБАВИТЬ
+    , m_cmdRetryCount(0)     // ← ДОБАВИТЬ
+    , m_cmdConfirmed(false)  // ← ДОБАВИТЬ
 {
     setupUI();
 
@@ -36,6 +41,11 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_socketCmd, &QTcpSocket::disconnected, this, &MainWindow::onCmdSocketDisconnected);
     connect(m_socketCmd, QOverload<QAbstractSocket::SocketError>::of(&QAbstractSocket::errorOccurred),
             this, &MainWindow::onCmdSocketError);
+
+    // ========== НОВОЕ: Таймер для подтверждения команд ==========
+    m_cmdTimer = new QTimer(this);
+    m_cmdTimer->setInterval(100);  // 100 мс таймаут
+    connect(m_cmdTimer, &QTimer::timeout, this, &MainWindow::onCmdTimeout);
 }
 
 MainWindow::~MainWindow()
@@ -70,7 +80,6 @@ void MainWindow::setupUI()
     m_ipEdit = new QLineEdit("192.168.0.7", this);
     connectionLayout->addWidget(m_ipEdit, 0, 1);
 
-    // ========== НОВОЕ: Два порта ==========
     connectionLayout->addWidget(new QLabel("Порт данных:"), 1, 0);
     m_portDataEdit = new QLineEdit("23", this);
     connectionLayout->addWidget(m_portDataEdit, 1, 1);
@@ -124,13 +133,27 @@ void MainWindow::setupUI()
     QLabel *dacLabel = new QLabel("<b>Управление DAC:</b>", this);
     ctrlLayout->addWidget(dacLabel);
 
+    // ========== НОВОЕ: Кнопка с индикатором статуса ==========
+    QHBoxLayout *testBtnLayout = new QHBoxLayout();
+
     m_testSequentialBtn = new QPushButton("▶ Последовательный тест", this);
     m_testSequentialBtn->setCheckable(true);
     m_testSequentialBtn->setStyleSheet(
         "QPushButton { padding: 8px; font-size: 12px; }"
         "QPushButton:checked { background-color: #90EE90; }"
     );
-    ctrlLayout->addWidget(m_testSequentialBtn);
+    testBtnLayout->addWidget(m_testSequentialBtn);
+
+    // Индикатор статуса команды (зелёный/серый/красный кружок)
+    m_cmdStatusLabel = new QLabel("●", this);
+    m_cmdStatusLabel->setFixedSize(20, 20);
+    m_cmdStatusLabel->setStyleSheet("QLabel { color: gray; font-size: 20px; }");
+    m_cmdStatusLabel->setToolTip("Статус команды");
+    testBtnLayout->addWidget(m_cmdStatusLabel);
+
+    testBtnLayout->addStretch();
+    ctrlLayout->addLayout(testBtnLayout);
+
     connect(m_testSequentialBtn, &QPushButton::clicked,
             this, &MainWindow::onTestSequentialClicked);
 
@@ -147,7 +170,6 @@ void MainWindow::setupUI()
     connect(m_connectBtn, &QPushButton::clicked, this, &MainWindow::connectToDevice);
     connect(m_disconnectBtn, &QPushButton::clicked, this, &MainWindow::disconnectFromDevice);
 }
-
 void MainWindow::connectToDevice()
 {
     m_deviceIP = m_ipEdit->text();
@@ -220,8 +242,8 @@ void MainWindow::onCmdSocketDisconnected()
     qDebug() << "❌ Сокет команд отключен";
     updateDisconnectedState();
 }
-
-void MainWindow::updateDisconnectedState()
+// это старая функция:
+/*void MainWindow::updateDisconnectedState()
 {
     m_statusLabel->setText("Отключено");
     m_statusLabel->setStyleSheet("QLabel { color: red; font-weight: bold; }");
@@ -235,8 +257,25 @@ void MainWindow::updateDisconnectedState()
     m_ledWidget->setState(false);
     m_testSequentialActive = false;
     m_testSequentialBtn->setChecked(false);
+}*/
+
+// ========== Отправка команды БЕЗ повторов (низкий уровень) ==========
+void MainWindow::sendCommandRaw(quint8 cmd, quint8 arg)
+{
+    if (!m_socketCmd || m_socketCmd->state() != QTcpSocket::ConnectedState) {
+        return;
+    }
+
+    QByteArray packet;
+    packet.append(static_cast<char>(0xCC));
+    packet.append(static_cast<char>(cmd));
+    packet.append(static_cast<char>(arg));
+
+    m_socketCmd->write(packet);
+    m_socketCmd->flush();
 }
 
+// ========== Отправка команды С повторами и подтверждением ==========
 void MainWindow::sendCommand(quint8 cmd, quint8 arg)
 {
     if (!m_socketCmd || m_socketCmd->state() != QTcpSocket::ConnectedState) {
@@ -244,20 +283,56 @@ void MainWindow::sendCommand(quint8 cmd, quint8 arg)
         return;
     }
 
-    QByteArray packet;
-    packet.append(static_cast<char>(0xCC));  // Маркер
-    packet.append(static_cast<char>(cmd));   // Команда
-    packet.append(static_cast<char>(arg));   // Аргумент
+    // Установить индикатор в "ожидание" (серый)
+    m_cmdStatusLabel->setStyleSheet("QLabel { color: gray; font-size: 20px; }");
 
-    // ========== Отправляем через КОМАНДНЫЙ сокет ==========
-    m_socketCmd->write(packet);
-    m_socketCmd->flush();
+    // Сохранить ожидаемую команду
+    m_pendingCmd = cmd;
+    m_cmdRetryCount = 0;
+    m_cmdConfirmed = false;
 
-    qDebug() << "📤 Команда:" << QString("0x%1").arg(cmd, 2, 16, QChar('0'))
-             << "через порт" << m_devicePortCmd;
+    // Отправить команду
+    sendCommandRaw(cmd, arg);
+
+    // Запустить таймер ожидания подтверждения
+    m_cmdTimer->start();
+
+    qDebug() << "📤 Команда отправлена:" << QString("0x%1").arg(cmd, 2, 16, QChar('0'));
 }
 
-void MainWindow::onTestSequentialClicked()
+// ========== Таймаут ожидания подтверждения ==========
+void MainWindow::onCmdTimeout()
+{
+    if (m_cmdConfirmed) {
+        // Команда подтверждена - остановить таймер
+        m_cmdTimer->stop();
+        m_cmdStatusLabel->setStyleSheet("QLabel { color: green; font-size: 20px; }");
+        qDebug() << "✅ Команда подтверждена:" << QString("0x%1").arg(m_pendingCmd, 2, 16, QChar('0'));
+        return;
+    }
+
+    // Команда не подтверждена - повторить
+    m_cmdRetryCount++;
+
+    if (m_cmdRetryCount >= 10) {
+        // Превышен лимит повторов
+        m_cmdTimer->stop();
+        m_cmdStatusLabel->setStyleSheet("QLabel { color: red; font-size: 20px; }");
+        qDebug() << "❌ Команда не подтверждена после 10 попыток:"
+                 << QString("0x%1").arg(m_pendingCmd, 2, 16, QChar('0'));
+
+        QMessageBox::warning(this, "Ошибка команды",
+                           "Команда не подтверждена устройством.\n"
+                           "Проверьте соединение.");
+        return;
+    }
+
+    // Повторить отправку
+    qDebug() << "⏳ Повтор команды" << m_cmdRetryCount << "/10";
+    sendCommandRaw(m_pendingCmd, 0x00);
+}
+// это старая функция
+/*void MainWindow::onTestSequentialClicked()
 {
     m_testSequentialActive = !m_testSequentialActive;
 
@@ -270,22 +345,20 @@ void MainWindow::onTestSequentialClicked()
         m_testSequentialBtn->setText("▶ Последовательный тест");
         m_testSequentialBtn->setChecked(false);
     }
-}
+}*/
 
 void MainWindow::onDataReceived()
 {
-    // ========== Читаем из СОКЕТА ДАННЫХ ==========
     QByteArray newData = m_socketData->readAll();
     rxBuffer.append(newData);
 
     static int skipCounter = 0;
     bool foundSomething = true;
 
-    // ========== ТОЛЬКО БАТЧИ АЦП, БЕЗ Echo! ==========
     while (foundSomething && rxBuffer.size() > 0) {
         foundSomething = false;
 
-        // Поиск батча [0xBB][N][...][0xCC]
+        // ========== Поиск батча [0xBB][N][...][0xCC] ==========
         for (int i = 0; i <= rxBuffer.size() - 2; i++) {
             if (static_cast<quint8>(rxBuffer.at(i)) == 0xBB) {
 
@@ -295,20 +368,18 @@ void MainWindow::onDataReceived()
 
                 quint8 batch_count = static_cast<quint8>(rxBuffer.at(i + 1));
 
-                if (batch_count == 0 || batch_count > 60) {  // С запасом для BATCH_SIZE=50
+                if (batch_count == 0 || batch_count > 60) {
                     rxBuffer.remove(0, 1);
                     foundSomething = true;
                     break;
                 }
 
-                // Рассчитать размер батча
                 int expected_size = 2 + batch_count * 9 + 1;
 
                 if (rxBuffer.size() < i + expected_size) {
-                    break;  // Ждём больше данных
+                    break;
                 }
 
-                // Проверка маркера конца
                 if (static_cast<quint8>(rxBuffer.at(i + expected_size - 1)) != 0xCC) {
                     rxBuffer.remove(0, i + 1);
                     foundSomething = true;
@@ -319,8 +390,26 @@ void MainWindow::onDataReceived()
                 int pos = i + 2;
 
                 for (quint8 m = 0; m < batch_count; m++) {
-                    char ledChar = rxBuffer.at(pos++);
+                    // Читаем байт статуса
+                    quint8 status_byte = static_cast<quint8>(rxBuffer.at(pos++));
 
+                    // Биты 0: LED состояние
+                    bool ledState = (status_byte & 0x01) != 0;
+
+                    // Биты 7-4: Подтверждение команды
+                    quint8 cmd_ack = (status_byte >> 4) & 0x0F;
+
+                    // ========== ПРОВЕРКА ПОДТВЕРЖДЕНИЯ ==========
+                    if (cmd_ack != 0 && cmd_ack == m_pendingCmd && !m_cmdConfirmed) {
+                        m_cmdConfirmed = true;
+                        qDebug() << "✅ Получено подтверждение команды:"
+                                 << QString("0x%1").arg(cmd_ack, 2, 16, QChar('0'));
+
+                        // Обновить состояние кнопки согласно подтверждённой команде
+                        updateButtonState(cmd_ack);
+                    }
+
+                    // Чтение 4 каналов АЦП
                     quint16 adc[4];
                     for (int ch = 0; ch < 4; ch++) {
                         quint8 hi = static_cast<quint8>(rxBuffer.at(pos++));
@@ -330,7 +419,7 @@ void MainWindow::onDataReceived()
 
                     // Обновление LED
                     if (m == batch_count - 1) {
-                        m_ledWidget->setState(ledChar == '1');
+                        m_ledWidget->setState(ledState);
                     }
 
                     // Добавление в график
@@ -346,14 +435,12 @@ void MainWindow::onDataReceived()
                     }
                 }
 
-                // Удалить обработанный батч
                 rxBuffer.remove(0, i + expected_size);
                 foundSomething = true;
                 break;
             }
         }
 
-        // Защита от переполнения буфера
         if (rxBuffer.size() > 5000) {
             qDebug() << "⚠️ Переполнение буфера, очистка";
             rxBuffer.remove(0, 1000);
@@ -361,7 +448,6 @@ void MainWindow::onDataReceived()
         }
     }
 
-    // Ограничение частоты перерисовки
     static QElapsedTimer frameTimer;
     static bool timerStarted = false;
     if (!timerStarted) {
@@ -428,4 +514,63 @@ void MainWindow::onCmdSocketError(QAbstractSocket::SocketError error)
     m_portDataEdit->setEnabled(true);
     m_portCmdEdit->setEnabled(true);
 }
+// ========== Обновление состояния кнопки по подтверждённой команде ==========
+void MainWindow::updateButtonState(quint8 cmd)
+{
+    switch (cmd) {
+        case 0x01:  // Последовательный тест ВКЛ
+            m_testSequentialActive = true;
+            m_testSequentialBtn->setChecked(true);
+            m_testSequentialBtn->setText("⏸ Остановить тест");
+            break;
+
+        case 0x02:  // Последовательный тест ВЫКЛ
+            m_testSequentialActive = false;
+            m_testSequentialBtn->setChecked(false);
+            m_testSequentialBtn->setText("▶ Последовательный тест");
+            break;
+
+        default:
+            break;
+    }
+}
+void MainWindow::onTestSequentialClicked()
+{
+    // Переключить ЖЕЛАЕМОЕ состояние
+    m_testSequentialActive = !m_testSequentialActive;
+
+    if (m_testSequentialActive) {
+        // Хотим включить
+        sendCommand(0x01, 0x00);
+        // НЕ меняем состояние кнопки сразу!
+        // Оно изменится в updateButtonState() после подтверждения
+    } else {
+        // Хотим выключить
+        sendCommand(0x02, 0x00);
+        // НЕ меняем состояние кнопки сразу!
+    }
+}
+void MainWindow::updateDisconnectedState()
+{
+    m_statusLabel->setText("Отключено");
+    m_statusLabel->setStyleSheet("QLabel { color: red; font-weight: bold; }");
+
+    m_connectBtn->setEnabled(true);
+    m_disconnectBtn->setEnabled(false);
+    m_ipEdit->setEnabled(true);
+    m_portDataEdit->setEnabled(true);
+    m_portCmdEdit->setEnabled(true);
+
+    m_ledWidget->setState(false);
+    m_testSequentialActive = false;
+    m_testSequentialBtn->setChecked(false);
+    m_testSequentialBtn->setText("▶ Последовательный тест");
+
+    // ========== ДОБАВИТЬ: Остановить таймер команд ==========
+    if (m_cmdTimer) {
+        m_cmdTimer->stop();
+    }
+    m_cmdStatusLabel->setStyleSheet("QLabel { color: gray; font-size: 20px; }");
+}
+
 

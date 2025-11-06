@@ -10,6 +10,7 @@
 #include <QPushButton>
 #include <QTextEdit>
 #include <QSpinBox>
+#include <QTimer>        // ← ВАЖНО!
 #include "ledwidget.h"
 #include "graphwidget.h"
 
@@ -25,7 +26,6 @@ private slots:
     void connectToDevice();
     void disconnectFromDevice();
 
-    // ========== НОВОЕ: Разные слоты для двух сокетов ==========
     void onDataSocketConnected();
     void onDataSocketDisconnected();
     void onDataReceived();
@@ -35,23 +35,25 @@ private slots:
     void onCmdSocketDisconnected();
     void onCmdSocketError(QAbstractSocket::SocketError error);
 
-    void onTestSequentialClicked();
+    void onTestSequentialClicked();  // ← Должно быть!
+    void onCmdTimeout();             // ← ДОБАВИТЬ!
 
 private:
     void setupUI();
     void sendCommand(quint8 cmd, quint8 arg);
-    // ========== ДОБАВИТЬ ЭТИ ДВЕ СТРОКИ В mainwindow.h! ==========
-    void checkBothConnected();       // Проверка что оба сокета подключены
-    void updateDisconnectedState();  // Обновление UI при отключении
+    void sendCommandRaw(quint8 cmd, quint8 arg);      // ← ДОБАВИТЬ!
+    void checkBothConnected();
+    void updateDisconnectedState();                   // ← Должно быть!
+    void updateButtonState(quint8 cmd);               // ← ДОБАВИТЬ!
 
-    // ========== ДВА СОКЕТА ==========
-    QTcpSocket *m_socketData;  // Для приема данных АЦП (порт 23)
-    QTcpSocket *m_socketCmd;   // Для отправки команд (порт 26)
+    // Сокеты
+    QTcpSocket *m_socketData;
+    QTcpSocket *m_socketCmd;
 
     // UI элементы
     QLineEdit *m_ipEdit;
-    QLineEdit *m_portDataEdit;  // Порт для данных
-    QLineEdit *m_portCmdEdit;   // Порт для команд
+    QLineEdit *m_portDataEdit;
+    QLineEdit *m_portCmdEdit;
     QPushButton *m_connectBtn;
     QPushButton *m_disconnectBtn;
     QLabel *m_statusLabel;
@@ -59,14 +61,21 @@ private:
     GraphWidget *m_graph;
     QSpinBox *m_skipBox;
     QPushButton *m_testSequentialBtn;
+    QLabel *m_cmdStatusLabel;      // ← ДОБАВИТЬ!
 
     // Данные
     QByteArray rxBuffer;
     QString m_deviceIP;
-    quint16 m_devicePortData;  // 23
-    quint16 m_devicePortCmd;   // 26
+    quint16 m_devicePortData;
+    quint16 m_devicePortCmd;
     int m_skipValue;
     bool m_testSequentialActive;
+
+    // Подтверждение команд
+    QTimer *m_cmdTimer;            // ← ДОБАВИТЬ!
+    quint8 m_pendingCmd;           // ← ДОБАВИТЬ!
+    int m_cmdRetryCount;           // ← ДОБАВИТЬ!
+    bool m_cmdConfirmed;           // ← ДОБАВИТЬ!
 };
 
 #endif // MAINWINDOW_H
