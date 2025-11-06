@@ -37,6 +37,7 @@ private slots:
 
     void onTestSequentialClicked();  // ← Должно быть!
     void onCmdTimeout();             // ← ДОБАВИТЬ!
+    void onPortDetectTimeout();  // ← ДОБАВИТЬ!
 
 private:
     void setupUI();
@@ -45,6 +46,7 @@ private:
     void checkBothConnected();
     void updateDisconnectedState();                   // ← Должно быть!
     void updateButtonState(quint8 cmd);               // ← ДОБАВИТЬ!
+    void swapPorts();  // ← ДОБАВИТЬ!
 
     // Сокеты
     QTcpSocket *m_socketData;
@@ -70,12 +72,18 @@ private:
     quint16 m_devicePortCmd;
     int m_skipValue;
     bool m_testSequentialActive;
+    bool m_portsSwapped;  // Флаг: порты перепутаны
+    int m_autoDetectCounter; // Счётчик для автоопределения
 
     // Подтверждение команд
     QTimer *m_cmdTimer;            // ← ДОБАВИТЬ!
     quint8 m_pendingCmd;           // ← ДОБАВИТЬ!
     int m_cmdRetryCount;           // ← ДОБАВИТЬ!
     bool m_cmdConfirmed;           // ← ДОБАВИТЬ!
+    // ========== ДОБАВИТЬ: Автоопределение портов ==========
+    QTimer *m_portDetectTimer;     // Таймер проверки портов
+    bool m_portsDetected;          // Флаг: порты проверены
+    int m_batchesReceived;         // Счётчик полученных батчей
 };
 
 #endif // MAINWINDOW_H

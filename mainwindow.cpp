@@ -24,6 +24,10 @@ MainWindow::MainWindow(QWidget *parent)
     , m_pendingCmd(0)        // ← ДОБАВИТЬ
     , m_cmdRetryCount(0)     // ← ДОБАВИТЬ
     , m_cmdConfirmed(false)  // ← ДОБАВИТЬ
+    , m_portsSwapped(false)      // ← ДОБАВИТЬ
+    , m_autoDetectCounter(0)     // ← ДОБАВИТЬ
+    , m_portsDetected(false)       // ← ДОБАВИТЬ
+    , m_batchesReceived(0)         // ← ДОБАВИТЬ
 {
     setupUI();
 
@@ -46,6 +50,11 @@ MainWindow::MainWindow(QWidget *parent)
     m_cmdTimer = new QTimer(this);
     m_cmdTimer->setInterval(100);  // 100 мс таймаут
     connect(m_cmdTimer, &QTimer::timeout, this, &MainWindow::onCmdTimeout);
+    // ========== НОВОЕ: Таймер автоопределения портов ==========
+        m_portDetectTimer = new QTimer(this);
+        m_portDetectTimer->setInterval(2000);  // Проверка через 2 секунды после подключения
+        m_portDetectTimer->setSingleShot(true); // Один раз
+        connect(m_portDetectTimer, &QTimer::timeout, this, &MainWindow::onPortDetectTimeout);
 }
 
 MainWindow::~MainWindow()
@@ -228,6 +237,12 @@ void MainWindow::checkBothConnected()
         m_ipEdit->setEnabled(false);
         m_portDataEdit->setEnabled(false);
         m_portCmdEdit->setEnabled(false);
+
+        // ========== НОВОЕ: Запустить проверку портов через 2 секунды ==========
+        m_portsDetected = false;
+        m_batchesReceived = 0;
+        m_portDetectTimer->start();
+        qDebug() << "⏱️ Запущена проверка портов (2 сек)...";
     }
 }
 
@@ -242,22 +257,6 @@ void MainWindow::onCmdSocketDisconnected()
     qDebug() << "❌ Сокет команд отключен";
     updateDisconnectedState();
 }
-// это старая функция:
-/*void MainWindow::updateDisconnectedState()
-{
-    m_statusLabel->setText("Отключено");
-    m_statusLabel->setStyleSheet("QLabel { color: red; font-weight: bold; }");
-
-    m_connectBtn->setEnabled(true);
-    m_disconnectBtn->setEnabled(false);
-    m_ipEdit->setEnabled(true);
-    m_portDataEdit->setEnabled(true);
-    m_portCmdEdit->setEnabled(true);
-
-    m_ledWidget->setState(false);
-    m_testSequentialActive = false;
-    m_testSequentialBtn->setChecked(false);
-}*/
 
 // ========== Отправка команды БЕЗ повторов (низкий уровень) ==========
 void MainWindow::sendCommandRaw(quint8 cmd, quint8 arg)
@@ -358,7 +357,7 @@ void MainWindow::onDataReceived()
     while (foundSomething && rxBuffer.size() > 0) {
         foundSomething = false;
 
-        // ========== Поиск батча [0xBB][N][...][0xCC] ==========
+        // ========== Поиск батча ==========
         for (int i = 0; i <= rxBuffer.size() - 2; i++) {
             if (static_cast<quint8>(rxBuffer.at(i)) == 0xBB) {
 
@@ -386,30 +385,24 @@ void MainWindow::onDataReceived()
                     break;
                 }
 
+                // ========== НОВОЕ: Увеличить счётчик батчей ==========
+                m_batchesReceived++;
+
                 // ========== РАСПАКОВКА БАТЧА ==========
                 int pos = i + 2;
 
                 for (quint8 m = 0; m < batch_count; m++) {
-                    // Читаем байт статуса
                     quint8 status_byte = static_cast<quint8>(rxBuffer.at(pos++));
-
-                    // Биты 0: LED состояние
                     bool ledState = (status_byte & 0x01) != 0;
-
-                    // Биты 7-4: Подтверждение команды
                     quint8 cmd_ack = (status_byte >> 4) & 0x0F;
 
-                    // ========== ПРОВЕРКА ПОДТВЕРЖДЕНИЯ ==========
                     if (cmd_ack != 0 && cmd_ack == m_pendingCmd && !m_cmdConfirmed) {
                         m_cmdConfirmed = true;
                         qDebug() << "✅ Получено подтверждение команды:"
                                  << QString("0x%1").arg(cmd_ack, 2, 16, QChar('0'));
-
-                        // Обновить состояние кнопки согласно подтверждённой команде
                         updateButtonState(cmd_ack);
                     }
 
-                    // Чтение 4 каналов АЦП
                     quint16 adc[4];
                     for (int ch = 0; ch < 4; ch++) {
                         quint8 hi = static_cast<quint8>(rxBuffer.at(pos++));
@@ -417,16 +410,13 @@ void MainWindow::onDataReceived()
                         adc[ch] = (hi << 8) | lo;
                     }
 
-                    // Обновление LED
                     if (m == batch_count - 1) {
                         m_ledWidget->setState(ledState);
                     }
 
-                    // Добавление в график
                     skipCounter++;
                     if (skipCounter >= m_skipValue) {
                         skipCounter = 0;
-
                         QVector<quint16> v(4);
                         for (int ch = 0; ch < 4; ch++) {
                             v[ch] = adc[ch];
@@ -442,7 +432,6 @@ void MainWindow::onDataReceived()
         }
 
         if (rxBuffer.size() > 5000) {
-            qDebug() << "⚠️ Переполнение буфера, очистка";
             rxBuffer.remove(0, 1000);
             foundSomething = true;
         }
@@ -460,7 +449,6 @@ void MainWindow::onDataReceived()
         m_graph->update();
     }
 }
-
 void MainWindow::onDataSocketError(QAbstractSocket::SocketError error)
 {
     QString errorString;
@@ -566,11 +554,63 @@ void MainWindow::updateDisconnectedState()
     m_testSequentialBtn->setChecked(false);
     m_testSequentialBtn->setText("▶ Последовательный тест");
 
-    // ========== ДОБАВИТЬ: Остановить таймер команд ==========
     if (m_cmdTimer) {
         m_cmdTimer->stop();
     }
     m_cmdStatusLabel->setStyleSheet("QLabel { color: gray; font-size: 20px; }");
+
+    // ========== ДОБАВИТЬ: Остановить таймер проверки портов ==========
+    if (m_portDetectTimer) {
+        m_portDetectTimer->stop();
+    }
+    m_portsDetected = false;
+    m_batchesReceived = 0;
 }
+// ========== ДОБАВИТЬ функцию переключения портов: ==========
+void MainWindow::swapPorts()
+{
+    qDebug() << "🔄 Автоматическое переключение портов...";
 
+    // Отключиться
+    if (m_socketData->state() == QTcpSocket::ConnectedState) {
+        m_socketData->disconnectFromHost();
+    }
+    if (m_socketCmd->state() == QTcpSocket::ConnectedState) {
+        m_socketCmd->disconnectFromHost();
+    }
 
+    // Подождать отключения
+    m_socketData->waitForDisconnected(1000);
+    m_socketCmd->waitForDisconnected(1000);
+
+    // Поменять порты местами
+    quint16 temp = m_devicePortData;
+    m_devicePortData = m_devicePortCmd;
+    m_devicePortCmd = temp;
+
+    m_portsSwapped = !m_portsSwapped;
+
+    qDebug() << "Новые порты: Данные=" << m_devicePortData << ", Команды=" << m_devicePortCmd;
+
+    // Переподключиться
+    m_socketData->connectToHost(m_deviceIP, m_devicePortData);
+    m_socketCmd->connectToHost(m_deviceIP, m_devicePortCmd);
+
+    m_autoDetectCounter = 0;
+}
+// ========== Таймаут проверки портов ==========
+void MainWindow::onPortDetectTimeout()
+{
+    qDebug() << "⏰ Проверка портов: получено батчей =" << m_batchesReceived;
+
+    if (m_batchesReceived == 0) {
+        // За 2 секунды не получили ни одного батча - порты перепутаны!
+        qDebug() << "❌ Батчи не получены! Порты перепутаны.";
+        qDebug() << "🔄 Автоматическое переключение портов...";
+
+        swapPorts();
+    } else {
+        qDebug() << "✅ Порты настроены правильно";
+        m_portsDetected = true;
+    }
+}
